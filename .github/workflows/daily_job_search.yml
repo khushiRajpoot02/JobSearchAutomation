@@ -1,0 +1,69 @@
+name: Daily Job Search Automation
+
+on:
+  schedule:
+    #  ┌─ minute  ┌─ hour (UTC)
+    #  │           │
+    - cron: '30 2 * * *'   # 08:00 AM IST (UTC+5:30) — change this to your preferred time
+    #  To change the time, use https://crontab.guru
+    #  Examples:
+    #    '0 3 * * *'  → 08:30 AM IST
+    #    '30 3 * * *' → 09:00 AM IST
+    #    '0 1 * * *'  → 06:30 AM IST
+
+  workflow_dispatch:   # Allows manual trigger from the GitHub Actions tab
+
+jobs:
+  job-search:
+    name: Run Job Search & Update Sheets
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # ── 1. Checkout ───────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python setup ───────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # ── 3. Dependency caching ─────────────────────────────────────────────
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # ── 4. Install dependencies ───────────────────────────────────────────
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── 5. Run automation ─────────────────────────────────────────────────
+      - name: Run job search automation
+        env:
+          SERPAPI_KEY:             ${{ secrets.SERPAPI_KEY }}
+          GEMINI_API_KEY:          ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_SHEET_ID:         ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+        run: |
+          cd src
+          python main.py
+
+      # ── 6. Notify on failure (optional — set up if you want email alerts) ─
+      # Uncomment the block below after adding NOTIFY_EMAIL to secrets
+      # - name: Notify on failure
+      #   if: failure()
+      #   uses: dawidd6/action-send-mail@v3
+      #   with:
+      #     server_address: smtp.gmail.com
+      #     server_port: 587
+      #     username: ${{ secrets.GMAIL_USER }}
+      #     password: ${{ secrets.GMAIL_APP_PASSWORD }}
+      #     to: arpitbatra98@gmail.com
+      #     subject: "⚠ Job Search Automation Failed"
+      #     body: "The daily job search run failed. Check the Actions tab for details."
