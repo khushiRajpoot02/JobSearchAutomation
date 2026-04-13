@@ -41,6 +41,7 @@ SEARCH_TERMS = [
     "Senior Flutter Developer",
     "Flutter Developer",
     "Flutter Engineer",
+    "Flutter"
 ]
 
 # Locations in preference order (index 0 = most preferred)
