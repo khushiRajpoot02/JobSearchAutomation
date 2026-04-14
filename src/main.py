@@ -23,6 +23,7 @@ from sheets_manager import (
     open_sheets,
     add_jobs,
     add_connections,
+    get_interested_companies,
     get_existing_companies_in_connections,
     get_accepted_connections_needing_message,
     update_message_draft,
@@ -74,7 +75,7 @@ def main() -> None:
         _fail(f"Could not connect to Google Sheets: {exc}")
         sys.exit(1)
 
-    # ── Step 2: Load existing companies (to avoid re-fetching profiles) ──────
+    # ── Step 2: Load interested companies and existing connections ───────────
     _header("Step 2 / 6 — Loading existing connection data")
     try:
         existing_companies = get_existing_companies_in_connections(conns_ws)
@@ -82,6 +83,13 @@ def main() -> None:
     except Exception as exc:
         _warn(f"Could not load existing companies: {exc}")
         existing_companies = set()
+
+    try:
+        interested_companies = get_interested_companies(jobs_ws)
+        _ok(f"{len(interested_companies)} company(s) marked as Interested")
+    except Exception as exc:
+        _warn(f"Could not load interested companies: {exc}")
+        interested_companies = set()
 
     # ── Step 3: Scrape jobs ──────────────────────────────────────────────────
     _header("Step 3 / 6 — Scraping new job openings")
@@ -96,18 +104,24 @@ def main() -> None:
         _fail(f"Failed to update Jobs sheet: {exc}")
         jobs_added = 0
 
-    # ── Step 5: Find LinkedIn profiles for new companies ────────────────────
+    # ── Step 5: Find LinkedIn profiles for interested companies ─────────────
     _header("Step 5 / 6 — Finding LinkedIn profiles for referrals")
     total_profiles_added = 0
 
-    if jobs:
+    # Only search profiles for companies the user marked Interested = Yes
+    # and that aren't already in the Connections sheet.
+    interested_jobs = [
+        j for j in jobs
+        if j.get("company_name") in interested_companies
+        and j.get("company_name") not in existing_companies
+    ]
+
+    if not interested_companies:
+        _ok("No jobs marked as Interested — skipping profile search")
+        _ok("Tip: set 'Interested' → 'Yes' in the Job Openings sheet to trigger profile search")
+    elif interested_jobs:
         try:
-            company_profiles = find_profiles_for_new_jobs(
-                jobs,
-                existing_companies,
-                # No hard cap — searches ALL new companies.
-                # A live budget guard stops gracefully if the weekly quota runs low.
-            )
+            company_profiles = find_profiles_for_new_jobs(interested_jobs, existing_companies)
 
             if company_profiles:
                 all_new_profiles = [
@@ -119,12 +133,12 @@ def main() -> None:
                     f"{len(company_profiles)} company(s)"
                 )
             else:
-                _ok("No new companies to search profiles for")
+                _ok("No new profiles found for interested companies")
 
         except Exception as exc:
             _warn(f"Profile search partially failed: {exc}")
     else:
-        _ok("No jobs found — skipping profile search")
+        _ok("Interested companies are already tracked in the Connections sheet")
 
     # ── Step 6: Draft messages for accepted connections ──────────────────────
     _header("Step 6 / 6 — Drafting referral messages for accepted connections")

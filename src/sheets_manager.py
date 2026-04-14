@@ -132,6 +132,20 @@ def get_existing_job_links(ws: gspread.Worksheet) -> set[str]:
     return {r.get("Job Link", "") for r in rows if r.get("Job Link")}
 
 
+def get_interested_companies(ws: gspread.Worksheet) -> set[str]:
+    """
+    Returns company names from Job Openings rows where Interested == "Yes".
+    Only these companies will have their LinkedIn profiles searched.
+    """
+    rows = _get_all_as_dicts(ws)
+    return {
+        r["Company Name"]
+        for r in rows
+        if r.get("Interested", "").strip().lower() == "yes"
+        and r.get("Company Name")
+    }
+
+
 def add_jobs(ws: gspread.Worksheet, jobs: list[dict]) -> int:
     """
     Inserts only NEW jobs (de-duplicated by link).
@@ -153,6 +167,7 @@ def add_jobs(ws: gspread.Worksheet, jobs: list[dict]) -> int:
             job.get("yoe", "Not specified"),
             job.get("link", ""),
             "No",                                        # Applied
+            "No",                                        # Interested
             job.get("hr_contact", ""),
             f"{job.get('match_score', 0):.0%}",
             "Product" if job.get("is_product_company") else "Service/Unknown",

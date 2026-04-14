@@ -44,17 +44,29 @@ SEARCH_TERMS = [
     "Flutter"
 ]
 
-# Locations in preference order (index 0 = most preferred)
+# Locations in preference order (index 0 = most preferred).
+# Only jobs from these cities (or remote) are shown; all others are hard-filtered.
 LOCATIONS = [
-    "Bangalore",
+    "Bengaluru",
     "Hyderabad",
     "Noida",
     "Gurgaon",
     "Pune",
     "Mumbai",
+    "Chandigarh",
 ]
 LOCATION_PRIORITY: dict[str, int] = {loc: idx for idx, loc in enumerate(LOCATIONS)}
 REMOTE_PRIORITY = len(LOCATIONS)          # Remote comes after all cities
+
+# Common spelling/naming aliases → canonical LOCATIONS name
+LOCATION_ALIASES: dict[str, str] = {
+    "bangalore":  "Bengaluru",
+    "bengaluru":  "Bengaluru",
+    "gurugram":   "Gurgaon",
+    "gurgaon":    "Gurgaon",
+}
+
+SKIP_LOCATION_SCORE = 998   # Sentinel — job is in a non-preferred city, discard
 
 # Job-type priority  (lower = more preferred)
 JOB_TYPE_PRIORITY: dict[str, int] = {
@@ -69,6 +81,21 @@ JOB_TYPE_PRIORITY: dict[str, int] = {
     "in-office":        2,
 }
 SKIP_JOB_TYPE_SCORE = 999   # Sentinel — job will be discarded
+
+# Source platform priority (lower = more preferred).
+# Google Jobs results carry per-listing source info extracted from apply_options.
+SOURCE_PRIORITY: dict[str, int] = {
+    "linkedin":  0,
+    "naukri":    1,
+    "instahyre": 2,
+    "hirist":    3,
+    "indeed":    4,
+    "wellfound": 5,
+    "angellist": 5,   # WellFound legacy domain
+}
+
+# SerpAPI pagination — each page costs 1 credit (10 results/page)
+GOOGLE_JOBS_PAGES = 3
 
 # Experience window  (jobs outside this range are filtered out)
 YOE_MIN_ACCEPTABLE = 3
@@ -112,6 +139,7 @@ JOB_COLUMNS = [
     "YOE Required",
     "Job Link",
     "Applied",            # No / Yes
+    "Interested",         # No / Yes — manually set; gates profile search
     "HR Contact",
     "Match Score",
     "Company Type",       # Product / Service / Unknown

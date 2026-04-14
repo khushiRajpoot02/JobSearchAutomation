@@ -16,19 +16,32 @@ from datetime import datetime
 from config import (
     SERPAPI_KEY, SEARCH_TERMS,
     PRIMARY_SKILLS, SECONDARY_SKILLS,
-    LOCATION_PRIORITY, REMOTE_PRIORITY,
+    LOCATION_PRIORITY, LOCATION_ALIASES, REMOTE_PRIORITY, SKIP_LOCATION_SCORE,
     JOB_TYPE_PRIORITY, SKIP_JOB_TYPE_SCORE,
+    SOURCE_PRIORITY, GOOGLE_JOBS_PAGES,
     YOE_MIN_ACCEPTABLE, YOE_MAX_ACCEPTABLE,
 )
+
+# Indian cities that are explicitly NOT in the preferred list.
+# If a job location matches one of these and no preferred city is also present,
+# the job is hard-filtered out.
+_NON_PREFERRED_CITIES = [
+    "chennai", "madras", "kolkata", "calcutta", "ahmedabad", "jaipur",
+    "lucknow", "kochi", "cochin", "coimbatore", "vizag", "visakhapatnam",
+    "bhopal", "indore", "nagpur", "surat", "vadodara", "baroda",
+    "thiruvananthapuram", "trivandrum", "mysuru", "mysore",
+]
 
 # ---------------------------------------------------------------------------
 # Scoring helpers
 # ---------------------------------------------------------------------------
 
-def calculate_match_score(text: str) -> float:
+def calculate_match_score(text: str, title: str = "") -> float:
     """
     Returns a 0-1 float representing how well the job matches Arpit's profile.
     Primary-skill matches are weighted 70 %, secondary 30 %.
+    A +0.25 title boost is applied when the job title contains a primary skill,
+    since title matches are a much stronger quality signal than description mentions.
     """
     low = text.lower()
     primary_hits   = sum(1 for s in PRIMARY_SKILLS   if s in low)
@@ -38,7 +51,12 @@ def calculate_match_score(text: str) -> float:
     primary_score   = min(primary_hits   / max(len(PRIMARY_SKILLS)   * 0.4, 1), 1.0)
     secondary_score = min(secondary_hits / max(len(SECONDARY_SKILLS) * 0.3, 1), 1.0)
 
-    return round(0.7 * primary_score + 0.3 * secondary_score, 2)
+    base = 0.7 * primary_score + 0.3 * secondary_score
+
+    # Title boost: primary skill in the job title is a strong relevance signal
+    title_boost = 0.25 if any(s in title.lower() for s in PRIMARY_SKILLS) else 0.0
+
+    return round(min(base + title_boost, 1.0), 2)
 
 
 def extract_yoe(text: str) -> Optional[tuple[int, int]]:
@@ -65,24 +83,46 @@ def extract_yoe(text: str) -> Optional[tuple[int, int]]:
 
 
 def get_location_priority(location_str: str) -> int:
+    """
+    Returns a priority integer for the given location string.
+    Returns SKIP_LOCATION_SCORE for jobs in known non-preferred Indian cities.
+    Vague locations ("India", "Pan India") are treated as flexible and pass through.
+    """
     low = location_str.lower()
-    if "remote" in low:
+
+    if any(kw in low for kw in ("remote", "work from home", "wfh")):
         return REMOTE_PRIORITY
+
+    # Check preferred cities via aliases first, then direct match
+    for alias, canonical in LOCATION_ALIASES.items():
+        if alias in low:
+            return LOCATION_PRIORITY[canonical]
     for city, priority in LOCATION_PRIORITY.items():
         if city.lower() in low:
             return priority
-    return REMOTE_PRIORITY + 1   # Unknown location — lowest priority
+
+    # Hard-filter known non-preferred Indian cities
+    if any(city in low for city in _NON_PREFERRED_CITIES):
+        return SKIP_LOCATION_SCORE
+
+    # Vague location ("India", empty, etc.) — include but deprioritise
+    return REMOTE_PRIORITY + 1
 
 
 def get_job_type_info(text: str) -> tuple[int, str]:
     """
     Returns (priority, label).
-    priority == SKIP_JOB_TYPE_SCORE  →  job should be discarded (6-day week).
+    priority == SKIP_JOB_TYPE_SCORE  →  job should be discarded (more than 5-day week).
     """
     low = text.lower()
 
-    # Hard filter: 6-day work week
-    if re.search(r'6[\s-]*day|six[\s-]*day', low):
+    # Hard filter: more than 5-day work week
+    if re.search(
+        r'6[\s-]*day|six[\s-]*day'           # "6 day", "6-day", "six day"
+        r'|mon(?:day)?\s*(?:to|-)\s*sat(?:urday)?'  # "Mon to Sat", "Monday-Saturday"
+        r'|5\.5\s*days?',                    # "5.5 days"
+        low,
+    ):
         return (SKIP_JOB_TYPE_SCORE, "skip")
 
     for keyword, priority in sorted(JOB_TYPE_PRIORITY.items(), key=lambda x: x[1]):
@@ -91,6 +131,29 @@ def get_job_type_info(text: str) -> tuple[int, str]:
             return (priority, labels[priority])
 
     return (3, "Unknown")   # Fallback — not discarded, just deprioritised
+
+
+def get_source_info(apply_options: list) -> tuple[int, str]:
+    """
+    Inspects the apply_options list from a Google Jobs result and returns
+    (source_priority, source_label) based on SOURCE_PRIORITY.
+    Falls back to ("Google Jobs", len(SOURCE_PRIORITY)) if no known platform matched.
+    """
+    _labels = {
+        "linkedin":  "LinkedIn",
+        "naukri":    "Naukri",
+        "instahyre": "Instahyre",
+        "hirist":    "Hirist",
+        "indeed":    "Indeed",
+        "wellfound": "WellFound",
+        "angellist": "WellFound",
+    }
+    for opt in apply_options:
+        combined = f"{opt.get('title', '')} {opt.get('link', '')}".lower()
+        for key, priority in sorted(SOURCE_PRIORITY.items(), key=lambda x: x[1]):
+            if key in combined:
+                return (priority, _labels.get(key, key.title()))
+    return (len(SOURCE_PRIORITY), "Google Jobs")
 
 
 def is_product_company(text: str) -> bool:
@@ -108,31 +171,40 @@ def is_product_company(text: str) -> bool:
 
 def scrape_google_jobs() -> list[dict]:
     """
-    ONE SerpAPI call covers all search terms by combining them with OR.
-    e.g. ("Senior Flutter Developer" OR "Flutter Developer" OR "Flutter Engineer") India
-    Google Jobs aggregates LinkedIn, Indeed, Naukri, WellFound, Instahyre, Hirist, etc.
-
-    Cost: 1 query/day = 30 queries/month (down from 60 with the old 2-query loop).
+    Fetches GOOGLE_JOBS_PAGES pages (10 results each) from SerpAPI Google Jobs.
+    All search terms are combined into one OR query to minimise credit usage.
+    Cost: GOOGLE_JOBS_PAGES credits/day.
     """
     combined_terms = " OR ".join(f'"{t}"' for t in SEARCH_TERMS)
-    params = {
-        "engine":    "google_jobs",
-        "q":         f"({combined_terms}) India",
-        "chips":     "date_posted:today",
-        "hl":        "en",
-        "api_key":   SERPAPI_KEY,
+    base_params = {
+        "engine":  "google_jobs",
+        "q":       f"({combined_terms}) India",
+        "chips":   "date_posted:3days",
+        "hl":      "en",
+        "api_key": SERPAPI_KEY,
     }
 
-    try:
-        resp = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as exc:
-        print(f"    [Google Jobs] API error for '{query}': {exc}")
-        return []
+    raw_results: list[dict] = []
+    for page in range(GOOGLE_JOBS_PAGES):
+        params = {**base_params, "start": page * 10}
+        try:
+            resp = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            print(f"    [Google Jobs] API error (page {page + 1}): {exc}")
+            break
+
+        page_results = data.get("jobs_results", [])
+        raw_results.extend(page_results)
+        print(f"    [Google Jobs] Page {page + 1}: {len(page_results)} results")
+
+        # Stop early if Google returned fewer results than a full page
+        if len(page_results) < 10:
+            break
 
     jobs: list[dict] = []
-    for raw in data.get("jobs_results", []):
+    for raw in raw_results:
         desc      = raw.get("description", "")
         title     = raw.get("title", "")
         company   = raw.get("company_name", "")
@@ -140,6 +212,10 @@ def scrape_google_jobs() -> list[dict]:
         full_text = f"{title} {company} {desc} {location}"
 
         # --- Hard filters ---
+        loc_priority = get_location_priority(location)
+        if loc_priority == SKIP_LOCATION_SCORE:
+            continue
+
         job_type_priority, job_type_label = get_job_type_info(full_text)
         if job_type_priority == SKIP_JOB_TYPE_SCORE:
             continue
@@ -148,32 +224,31 @@ def scrape_google_jobs() -> list[dict]:
         if yoe and (yoe[1] < YOE_MIN_ACCEPTABLE or yoe[0] > YOE_MAX_ACCEPTABLE):
             continue
 
-        match_score = calculate_match_score(full_text)
-        if match_score < 0.15:          # Very low relevance — skip
+        match_score = calculate_match_score(full_text, title)
+        if match_score < 0.25:          # Low relevance — skip
             continue
 
-        # --- Best apply link ---
-        job_link = ""
-        for opt in raw.get("apply_options", []):
-            job_link = opt.get("link", "")
-            if job_link:
-                break
+        # --- Source platform & best apply link ---
+        apply_options = raw.get("apply_options", [])
+        source_priority, source_label = get_source_info(apply_options)
+        job_link = next((o.get("link", "") for o in apply_options if o.get("link")), "")
 
         jobs.append({
-            "company_name":      company,
-            "title":             title,
-            "location":          location,
-            "yoe":               f"{yoe[0]}-{yoe[1]} yrs" if yoe else "Not specified",
-            "link":              job_link,
-            "applied":           "No",
-            "hr_contact":        "",
-            "match_score":       match_score,
+            "company_name":       company,
+            "title":              title,
+            "location":           location,
+            "yoe":                f"{yoe[0]}-{yoe[1]} yrs" if yoe else "Not specified",
+            "link":               job_link,
+            "applied":            "No",
+            "hr_contact":         "",
+            "match_score":        match_score,
             "is_product_company": is_product_company(full_text),
-            "job_type_priority": job_type_priority,
-            "job_type_label":    job_type_label,
-            "location_priority": get_location_priority(location),
-            "source":            "Google Jobs",
-            "description":       desc[:600],
+            "job_type_priority":  job_type_priority,
+            "job_type_label":     job_type_label,
+            "location_priority":  loc_priority,
+            "source":             source_label,
+            "source_priority":    source_priority,
+            "description":        desc[:600],
         })
 
     return jobs
@@ -226,7 +301,7 @@ def scrape_wellfound() -> list[dict]:
             if h_tag:
                 company_name = h_tag.get_text(strip=True)
 
-        match_score = calculate_match_score(f"{title} {company_name}")
+        match_score = calculate_match_score(f"{title} {company_name}", title)
 
         jobs.append({
             "company_name":      company_name,
@@ -242,6 +317,7 @@ def scrape_wellfound() -> list[dict]:
             "job_type_label":    "Remote/Hybrid",
             "location_priority": REMOTE_PRIORITY,
             "source":            "WellFound",
+            "source_priority":   SOURCE_PRIORITY.get("wellfound", len(SOURCE_PRIORITY)),
             "description":       "",
         })
 
@@ -302,7 +378,7 @@ def scrape_hirist() -> list[dict]:
         exp_tag = card.find(text=re.compile(r"\d+\s*[-–]\s*\d+\s*(?:yrs?|years?)", re.I))
         yoe_str = exp_tag.strip() if exp_tag else "Not specified"
 
-        match_score = calculate_match_score(f"{title} {company_name}")
+        match_score = calculate_match_score(f"{title} {company_name}", title)
 
         jobs.append({
             "company_name":      company_name,
@@ -318,6 +394,7 @@ def scrape_hirist() -> list[dict]:
             "job_type_label":    "Unknown",
             "location_priority": REMOTE_PRIORITY + 1,
             "source":            "Hirist",
+            "source_priority":   SOURCE_PRIORITY.get("hirist", len(SOURCE_PRIORITY)),
             "description":       "",
         })
 
@@ -356,10 +433,11 @@ def get_all_jobs() -> list[dict]:
 
     # --- Sort ---
     all_jobs.sort(key=lambda j: (
-        0 if j["is_product_company"] else 1,   # product first
-        -j["match_score"],                      # higher score first
-        j["location_priority"],                 # Bangalore before Mumbai
-        j["job_type_priority"],                 # hybrid before WFO
+        0 if j["is_product_company"] else 1,        # product first
+        -j["match_score"],                           # higher score first
+        j["location_priority"],                      # Bengaluru before Mumbai
+        j["job_type_priority"],                      # hybrid before WFO
+        j.get("source_priority", len(SOURCE_PRIORITY)),  # LinkedIn before Naukri, etc.
     ))
 
     print(f"\n  Total unique jobs: {len(all_jobs)}")
