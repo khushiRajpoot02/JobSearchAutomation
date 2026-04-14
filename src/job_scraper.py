@@ -187,8 +187,13 @@ def scrape_google_jobs() -> list[dict]:
     }
 
     raw_results: list[dict] = []
+    next_page_token = None
+
     for page in range(GOOGLE_JOBS_PAGES):
-        params = {**base_params, "start": page * 10}
+        params = {**base_params}
+        if next_page_token:
+            params["next_page_token"] = next_page_token
+
         try:
             resp = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
             resp.raise_for_status()
@@ -201,8 +206,9 @@ def scrape_google_jobs() -> list[dict]:
         raw_results.extend(page_results)
         print(f"    [Google Jobs] Page {page + 1}: {len(page_results)} results")
 
-        # Stop early if Google returned fewer results than a full page
-        if len(page_results) < 10:
+        # Get token for next page; stop if there are no more pages
+        next_page_token = data.get("serpapi_pagination", {}).get("next_page_token")
+        if not next_page_token:
             break
 
     jobs: list[dict] = []
