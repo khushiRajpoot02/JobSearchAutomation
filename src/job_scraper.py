@@ -177,11 +177,13 @@ def scrape_google_jobs() -> list[dict]:
     """
     combined_terms = " OR ".join(f'"{t}"' for t in SEARCH_TERMS)
     base_params = {
-        "engine":  "google_jobs",
-        "q":       f"({combined_terms}) India",
-        "chips":   "date_posted:3days",
-        "hl":      "en",
-        "api_key": SERPAPI_KEY,
+        "engine":   "google_jobs",
+        "q":        f"({combined_terms}) India",
+        "uds":      "ALYpb_ncDc7jTlmw6Mmq7NjuX5c-FaT6jj3U4NaCIztIIXkfpNd8OUsQwGH8yDdU96KXd5pcsxHZRLTL76qGjbZmdouyhzt3Poq-V188s58McwuoWw9IvoPOFn8EAadwp2sPHMc_dhuAYbuFLulptMbpnTEh3V_fBq6nGegrTzpWvRLz56wvNqlcdy1fHNjeFrqyRDw1oMpIC52tBioz2f6wqGSM2mOamYYwHNQ4Tgfzn83weCXOzDqR42lLV465oVoeAeCYSikPjBey0dWzimuezQ8X5Cw7OEIZ2oWjLwXFkmxiC3RIfkQ0BabJoyaYMqWbaArZOudPmP2m5S5TXRs2vPBWzkEdzA",
+        "location": "Bangalore Division, Karnataka, India",
+        "gl":       "in",
+        "hl":       "en",
+        "api_key":  SERPAPI_KEY,
     }
 
     raw_results: list[dict] = []
