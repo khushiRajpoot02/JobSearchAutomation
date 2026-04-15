@@ -17,9 +17,9 @@ GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
 # ---------------------------------------------------------------------------
 # Candidate profile  (used to score job matches & personalise messages)
 # ---------------------------------------------------------------------------
-CANDIDATE_NAME       = "Arpit Batra"
-CANDIDATE_LINKEDIN   = "linkedin.com/in/arpit-batra2"
-YEARS_OF_EXPERIENCE  = 5
+CANDIDATE_NAME       = os.environ.get("CANDIDATE_NAME", "")
+CANDIDATE_LINKEDIN   = os.environ.get("CANDIDATE_LINKEDIN", "")
+YEARS_OF_EXPERIENCE  = int(os.environ.get("YEARS_OF_EXPERIENCE", "0"))
 
 # Skills drawn directly from the resume — order matters for scoring
 PRIMARY_SKILLS = [
