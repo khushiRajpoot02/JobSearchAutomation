@@ -50,9 +50,12 @@ jobs:
           GEMINI_API_KEY:          ${{ secrets.GEMINI_API_KEY }}
           GOOGLE_SHEET_ID:         ${{ secrets.GOOGLE_SHEET_ID }}
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          CANDIDATE_NAME:          ${{ secrets.CANDIDATE_NAME }}
+          CANDIDATE_LINKEDIN:      ${{ secrets.CANDIDATE_LINKEDIN }}
+          YEARS_OF_EXPERIENCE:     ${{ secrets.YEARS_OF_EXPERIENCE }}
         run: |
           cd src
-          python main.py
+          python main.py --mode find_jobs
 
       # ── 6. Notify on failure (optional — set up if you want email alerts) ─
       # Uncomment the block below after adding NOTIFY_EMAIL to secrets

@@ -146,6 +146,25 @@ def get_interested_companies(ws: gspread.Worksheet) -> set[str]:
     }
 
 
+def get_interested_jobs_from_sheet(ws: gspread.Worksheet) -> list[dict]:
+    """
+    Returns minimal job dicts (company_name + match_score) for all rows
+    where Interested == "Yes". Used by the standalone profile-finder run
+    so it doesn't need a live scrape to know which companies to search.
+    """
+    rows = _get_all_as_dicts(ws)
+    jobs = []
+    for r in rows:
+        if r.get("Interested", "").strip().lower() == "yes" and r.get("Company Name"):
+            score_str = r.get("Match Score", "0%").strip().rstrip("%")
+            try:
+                score = float(score_str) / 100
+            except ValueError:
+                score = 0.0
+            jobs.append({"company_name": r["Company Name"], "match_score": score})
+    return jobs
+
+
 def add_jobs(ws: gspread.Worksheet, jobs: list[dict]) -> int:
     """
     Inserts only NEW jobs (de-duplicated by link).

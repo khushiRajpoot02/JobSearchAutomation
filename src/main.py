@@ -1,18 +1,20 @@
 """
-Job Search Automation — daily orchestrator.
+Job Search Automation — orchestrator.
 
-Run order:
-  1. Connect to Google Sheets (create sheets if needed)
-  2. Scrape new jobs from all sources
-  3. Add new jobs to Sheet 1 ("Job Openings")
-  4. Find LinkedIn profiles for NEW companies (not already tracked)
-  5. Add those profiles to Sheet 2 ("Connections") — status: "Not Sent"
-     → You manually send the requests on LinkedIn and flip status → "Pending"
-  6. Draft personalised referral messages for connections that became "Accepted"
-     (you update the status manually in the sheet after seeing the LinkedIn notification)
-  7. Print a summary
+Modes (pass via --mode):
+  find_jobs       Scrape new jobs and write them to the Job Openings sheet.
+                  This is the mode used by the daily scheduled run.
+
+  find_profiles   Read all jobs marked Interested=Yes from the sheet and
+                  search LinkedIn profiles for companies not yet in Connections.
+                  Run this manually after marking jobs as interested.
+
+  draft_messages  Draft referral messages via Gemini for every connection
+                  whose status is Accepted but has no message yet.
+                  Run this manually after a connection request is accepted.
 """
 
+import argparse
 import sys
 from datetime import datetime
 
@@ -24,6 +26,7 @@ from sheets_manager import (
     add_jobs,
     add_connections,
     get_interested_companies,
+    get_interested_jobs_from_sheet,
     get_existing_companies_in_connections,
     get_accepted_connections_needing_message,
     update_message_draft,
@@ -56,47 +59,14 @@ def _fail(text: str):
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Mode: find_jobs
 # ---------------------------------------------------------------------------
 
-def main() -> None:
-    start_time = datetime.now()
-    print(f"\n{'═' * 60}")
-    print(f"  Job Search Automation  —  {start_time.strftime('%A, %d %b %Y  %H:%M')}")
-    print(f"{'═' * 60}")
-
-    # ── Step 1: Google Sheets ────────────────────────────────────────────────
-    _header("Step 1 / 6 — Connecting to Google Sheets")
-    try:
-        client         = get_client()
-        jobs_ws, conns_ws = open_sheets(client)
-        _ok("Connected  |  Sheets ready")
-    except Exception as exc:
-        _fail(f"Could not connect to Google Sheets: {exc}")
-        sys.exit(1)
-
-    # ── Step 2: Load interested companies and existing connections ───────────
-    _header("Step 2 / 6 — Loading existing connection data")
-    try:
-        existing_companies = get_existing_companies_in_connections(conns_ws)
-        _ok(f"{len(existing_companies)} companies already in Connections sheet")
-    except Exception as exc:
-        _warn(f"Could not load existing companies: {exc}")
-        existing_companies = set()
-
-    try:
-        interested_companies = get_interested_companies(jobs_ws)
-        _ok(f"{len(interested_companies)} company(s) marked as Interested")
-    except Exception as exc:
-        _warn(f"Could not load interested companies: {exc}")
-        interested_companies = set()
-
-    # ── Step 3: Scrape jobs ──────────────────────────────────────────────────
-    _header("Step 3 / 6 — Scraping new job openings")
+def run_find_jobs(jobs_ws, conns_ws) -> dict:
+    _header("Step 1 / 2 — Scraping new job openings")
     jobs = get_all_jobs()
 
-    # ── Step 4: Update Jobs sheet ────────────────────────────────────────────
-    _header("Step 4 / 6 — Updating Job Openings sheet")
+    _header("Step 2 / 2 — Updating Job Openings sheet")
     try:
         jobs_added = add_jobs(jobs_ws, jobs)
         _ok(f"{jobs_added} new job(s) added  |  {len(jobs) - jobs_added} duplicate(s) skipped")
@@ -104,83 +74,147 @@ def main() -> None:
         _fail(f"Failed to update Jobs sheet: {exc}")
         jobs_added = 0
 
-    # ── Step 5: Find LinkedIn profiles for interested companies ─────────────
-    _header("Step 5 / 6 — Finding LinkedIn profiles for referrals")
+    return {"jobs_added": jobs_added}
+
+
+# ---------------------------------------------------------------------------
+# Mode: find_profiles
+# ---------------------------------------------------------------------------
+
+def run_find_profiles(jobs_ws, conns_ws) -> dict:
+    _header("Step 1 / 2 — Loading interested companies from sheet")
+    try:
+        existing_companies = get_existing_companies_in_connections(conns_ws)
+        _ok(f"{len(existing_companies)} company(s) already tracked in Connections")
+    except Exception as exc:
+        _warn(f"Could not load existing companies: {exc}")
+        existing_companies = set()
+
+    try:
+        interested_jobs = get_interested_jobs_from_sheet(jobs_ws)
+        interested_companies = {j["company_name"] for j in interested_jobs}
+        _ok(f"{len(interested_jobs)} job(s) marked as Interested")
+    except Exception as exc:
+        _fail(f"Could not load interested jobs from sheet: {exc}")
+        return {"profiles_added": 0}
+
+    if not interested_jobs:
+        _ok("No jobs marked Interested — nothing to do")
+        _ok(f"Tip: set 'Interested' → 'Yes' in the '{JOBS_SHEET_NAME}' sheet and re-run")
+        return {"profiles_added": 0}
+
+    new_jobs = [j for j in interested_jobs if j["company_name"] not in existing_companies]
+    if not new_jobs:
+        _ok("All interested companies are already tracked in the Connections sheet")
+        return {"profiles_added": 0}
+
+    _header("Step 2 / 2 — Searching LinkedIn profiles")
     total_profiles_added = 0
+    try:
+        company_profiles = find_profiles_for_new_jobs(new_jobs, existing_companies)
+        if company_profiles:
+            all_profiles = [p for profiles in company_profiles.values() for p in profiles]
+            total_profiles_added = add_connections(conns_ws, all_profiles)
+            _ok(
+                f"{total_profiles_added} profile(s) added across "
+                f"{len(company_profiles)} company(s)"
+            )
+        else:
+            _ok("No new profiles found")
+    except Exception as exc:
+        _warn(f"Profile search failed: {exc}")
 
-    # Only search profiles for companies the user marked Interested = Yes
-    # and that aren't already in the Connections sheet.
-    interested_jobs = [
-        j for j in jobs
-        if j.get("company_name") in interested_companies
-        and j.get("company_name") not in existing_companies
-    ]
+    return {"profiles_added": total_profiles_added}
 
-    if not interested_companies:
-        _ok("No jobs marked as Interested — skipping profile search")
-        _ok("Tip: set 'Interested' → 'Yes' in the Job Openings sheet to trigger profile search")
-    elif interested_jobs:
-        try:
-            company_profiles = find_profiles_for_new_jobs(interested_jobs, existing_companies)
 
-            if company_profiles:
-                all_new_profiles = [
-                    p for profiles in company_profiles.values() for p in profiles
-                ]
-                total_profiles_added = add_connections(conns_ws, all_new_profiles)
-                _ok(
-                    f"{total_profiles_added} profile(s) added across "
-                    f"{len(company_profiles)} company(s)"
-                )
-            else:
-                _ok("No new profiles found for interested companies")
+# ---------------------------------------------------------------------------
+# Mode: draft_messages
+# ---------------------------------------------------------------------------
 
-        except Exception as exc:
-            _warn(f"Profile search partially failed: {exc}")
-    else:
-        _ok("Interested companies are already tracked in the Connections sheet")
-
-    # ── Step 6: Draft messages for accepted connections ──────────────────────
-    _header("Step 6 / 6 — Drafting referral messages for accepted connections")
+def run_draft_messages(conns_ws) -> dict:
+    _header("Finding accepted connections that need a message draft")
     try:
         accepted = get_accepted_connections_needing_message(conns_ws)
-
-        if accepted:
-            _ok(f"{len(accepted)} accepted connection(s) need a message draft")
-            for conn in accepted:
-                name = conn.get("Connection Name", "Unknown")
-                print(f"\n    Drafting for {name} @ {conn.get('Company Name', '?')} …")
-                try:
-                    message = draft_referral_message(conn)
-                    update_message_draft(conns_ws, conn["_row_index"], message)
-                    _ok(f"Message saved for {name}")
-                except Exception as exc:
-                    _warn(f"Could not draft message for {name}: {exc}")
-        else:
-            _ok("No accepted connections needing messages right now")
-
     except Exception as exc:
-        _warn(f"Message drafting step failed: {exc}")
-        accepted = []
+        _fail(f"Could not read Connections sheet: {exc}")
+        return {"messages_drafted": 0}
 
-    # ── Summary ──────────────────────────────────────────────────────────────
+    if not accepted:
+        _ok("No accepted connections needing messages right now")
+        return {"messages_drafted": 0}
+
+    _ok(f"{len(accepted)} accepted connection(s) to draft")
+    drafted = 0
+    for conn in accepted:
+        name = conn.get("Connection Name", "Unknown")
+        print(f"\n    Drafting for {name} @ {conn.get('Company Name', '?')} …")
+        try:
+            message = draft_referral_message(conn)
+            update_message_draft(conns_ws, conn["_row_index"], message)
+            _ok(f"Message saved for {name}")
+            drafted += 1
+        except Exception as exc:
+            _warn(f"Could not draft message for {name}: {exc}")
+
+    return {"messages_drafted": drafted}
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Job Search Automation")
+    parser.add_argument(
+        "--mode",
+        choices=["find_jobs", "find_profiles", "draft_messages"],
+        default="find_jobs",
+        help="Which part of the pipeline to run",
+    )
+    args = parser.parse_args()
+
+    start_time = datetime.now()
+    print(f"\n{'═' * 60}")
+    print(f"  Job Search Automation  —  {start_time.strftime('%A, %d %b %Y  %H:%M')}")
+    print(f"  Mode: {args.mode}")
+    print(f"{'═' * 60}")
+
+    _header("Connecting to Google Sheets")
+    try:
+        client = get_client()
+        jobs_ws, conns_ws = open_sheets(client)
+        _ok("Connected  |  Sheets ready")
+    except Exception as exc:
+        _fail(f"Could not connect to Google Sheets: {exc}")
+        sys.exit(1)
+
+    if args.mode == "find_jobs":
+        stats = run_find_jobs(jobs_ws, conns_ws)
+    elif args.mode == "find_profiles":
+        stats = run_find_profiles(jobs_ws, conns_ws)
+    elif args.mode == "draft_messages":
+        stats = run_draft_messages(conns_ws)
+
     elapsed = (datetime.now() - start_time).seconds
     print(f"\n{'═' * 60}")
     print("  ✅  Run complete!")
     print(f"{'═' * 60}")
-    print(f"  • New jobs added          : {jobs_added}")
-    print(f"  • New profiles added      : {total_profiles_added}")
-    print(f"  • Messages drafted        : {len(accepted) if isinstance(accepted, list) else 0}")
-    print(f"  • Time taken              : {elapsed}s")
-    print(f"\n  ℹ  Next steps (manual):")
-    print(f"     1. Open the '{CONNECTIONS_SHEET_NAME}' sheet")
-    print(f"        — review profiles & send connection requests on LinkedIn")
-    print(f"        — update 'Connection Status' → 'Pending' after sending")
-    print(f"     2. When a request is accepted on LinkedIn,")
-    print(f"        update 'Connection Status' → 'Accepted'")
-    print(f"        The next daily run will auto-draft a referral message.")
-    print(f"     3. Open the '{JOBS_SHEET_NAME}' sheet")
-    print(f"        — mark 'Applied' → 'Yes' after applying")
+    for key, val in stats.items():
+        label = key.replace("_", " ").capitalize()
+        print(f"  • {label:<28}: {val}")
+    print(f"  • {'Time taken':<28}: {elapsed}s")
+
+    if args.mode == "find_jobs":
+        print(f"\n  ℹ  Next step: open the '{JOBS_SHEET_NAME}' sheet,")
+        print(f"     review new jobs, and mark 'Interested' → 'Yes'.")
+        print(f"     Then trigger the 'Find LinkedIn Profiles' workflow.")
+    elif args.mode == "find_profiles":
+        print(f"\n  ℹ  Next step: send connection requests on LinkedIn,")
+        print(f"     then update 'Connection Status' → 'Pending' in the sheet.")
+        print(f"     When a request is accepted, trigger the 'Draft Messages' workflow.")
+    elif args.mode == "draft_messages":
+        print(f"\n  ℹ  Next step: review the drafts in the '{CONNECTIONS_SHEET_NAME}' sheet")
+        print(f"     and send the edited message on LinkedIn.")
     print()
 
 
