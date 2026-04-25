@@ -4,7 +4,7 @@ on:
   schedule:
     #  ┌─ minute  ┌─ hour (UTC)
     #  │           │
-    - cron: '30 2 * * *'   # 08:00 AM IST (UTC+5:30) — change this to your preferred time
+    - cron: '30 3 * * *'   # 08:00 AM IST (UTC+5:30) — change this to your preferred time
     #  To change the time, use https://crontab.guru
     #  Examples:
     #    '0 3 * * *'  → 08:30 AM IST

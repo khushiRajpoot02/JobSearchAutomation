@@ -23,14 +23,14 @@ YEARS_OF_EXPERIENCE  = int(os.environ.get("YEARS_OF_EXPERIENCE", "0"))
 
 # Skills drawn directly from the resume — order matters for scoring
 PRIMARY_SKILLS = [
-    "flutter", "dart", "flutterflow", "cross-platform",
-    "ios", "android", "mobile", "bloc", "getx", "provider",
-    "firebase", "riverpod",
+    "React Native", "JavaScript", "cross-platform",
+    "ios", "android", "mobile", "redux", "redux-toolkit", "provider",
+    "firebase", "Mobile Application Development", 
 ]
 
 SECONDARY_SKILLS = [
-    "react", "java", "github actions", "rest api", "graphql",
-    "ai", "shorebird", "firebase analytics", "auth0",
+    "React.js", "java", "github actions", "rest api", "graphql",
+    "ai", "firebase analytics", "auth0",
     "deep linking", "in-app purchase", "push notification",
 ]
 
@@ -38,10 +38,9 @@ SECONDARY_SKILLS = [
 # Job search parameters
 # ---------------------------------------------------------------------------
 SEARCH_TERMS = [
-    "Senior Flutter Developer",
-    "Flutter Developer",
-    "Flutter Engineer",
-    "Flutter"
+    "React Native Developer",
+     "React Native",
+ 
 ]
 
 # Locations in preference order (index 0 = most preferred).
@@ -98,11 +97,11 @@ SOURCE_PRIORITY: dict[str, int] = {
 GOOGLE_JOBS_PAGES = 3
 
 # Experience window  (jobs outside this range are filtered out)
-YOE_MIN_ACCEPTABLE = 3
-YOE_MAX_ACCEPTABLE = 9
+YOE_MIN_ACCEPTABLE = 2
+YOE_MAX_ACCEPTABLE = 5
 
 # Company filters
-MIN_COMPANY_SIZE        = 200   # employees (used in profile-count heuristic)
+MIN_COMPANY_SIZE        = 25   # employees (used in profile-count heuristic)
 PREFER_PRODUCT_COMPANY  = True
 
 # ---------------------------------------------------------------------------
