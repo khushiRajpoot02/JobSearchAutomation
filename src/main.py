@@ -16,6 +16,7 @@ Modes (pass via --mode):
 
 import argparse
 import sys
+import traceback
 from datetime import datetime
 
 from config import JOBS_SHEET_NAME, CONNECTIONS_SHEET_NAME
@@ -186,6 +187,8 @@ def main() -> None:
         _ok("Connected  |  Sheets ready")
     except Exception as exc:
         _fail(f"Could not connect to Google Sheets: {exc}")
+        print("\n  Full traceback:")
+        traceback.print_exc()
         sys.exit(1)
 
     if args.mode == "find_jobs":

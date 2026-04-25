@@ -42,11 +42,39 @@ _CONNECTIONS_HEADER_COLOR = {"red": 0.18, "green": 0.53, "blue": 0.34}  # deep g
 
 def get_client() -> gspread.Client:
     """Build and return an authorised gspread client."""
+    import traceback
+
+    print("  [debug] Checking GOOGLE_CREDENTIALS_JSON …")
     if not GOOGLE_CREDENTIALS_JSON:
         raise EnvironmentError("GOOGLE_CREDENTIALS_JSON is not set.")
-    creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
-    creds      = Credentials.from_service_account_info(creds_dict, scopes=_SCOPES)
-    return gspread.authorize(creds)
+    print(f"  [debug] GOOGLE_CREDENTIALS_JSON present (length={len(GOOGLE_CREDENTIALS_JSON)})")
+
+    print("  [debug] Parsing credentials JSON …")
+    try:
+        creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"GOOGLE_CREDENTIALS_JSON is not valid JSON: {exc}") from exc
+
+    print(f"  [debug] JSON parsed OK — type={creds_dict.get('type')!r}, "
+          f"project_id={creds_dict.get('project_id')!r}, "
+          f"client_email={creds_dict.get('client_email')!r}")
+
+    print("  [debug] Building service-account credentials …")
+    try:
+        creds = Credentials.from_service_account_info(creds_dict, scopes=_SCOPES)
+    except Exception as exc:
+        traceback.print_exc()
+        raise RuntimeError(f"Failed to build credentials: {exc}") from exc
+
+    print("  [debug] Authorising gspread client …")
+    try:
+        client = gspread.authorize(creds)
+    except Exception as exc:
+        traceback.print_exc()
+        raise RuntimeError(f"gspread.authorize failed: {exc}") from exc
+
+    print("  [debug] gspread client authorised OK")
+    return client
 
 
 def get_or_create_sheet(
@@ -59,7 +87,19 @@ def get_or_create_sheet(
     Opens the named worksheet inside GOOGLE_SHEET_ID.
     Creates it (with formatted headers) if it doesn't exist yet.
     """
-    spreadsheet = client.open_by_key(GOOGLE_SHEET_ID)
+    import traceback
+
+    print(f"  [debug] Opening spreadsheet by key: {GOOGLE_SHEET_ID!r} …")
+    try:
+        spreadsheet = client.open_by_key(GOOGLE_SHEET_ID)
+    except Exception as exc:
+        traceback.print_exc()
+        raise RuntimeError(
+            f"Could not open spreadsheet '{GOOGLE_SHEET_ID}': {exc}\n"
+            "  Check that GOOGLE_SHEET_ID is correct and the service account "
+            "has been shared on the sheet."
+        ) from exc
+    print(f"  [debug] Spreadsheet opened: {spreadsheet.title!r}")
 
     try:
         ws = spreadsheet.worksheet(sheet_name)
