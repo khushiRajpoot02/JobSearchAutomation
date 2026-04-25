@@ -95,9 +95,12 @@ def get_or_create_sheet(
     except Exception as exc:
         traceback.print_exc()
         raise RuntimeError(
-            f"Could not open spreadsheet '{GOOGLE_SHEET_ID}': {exc}\n"
-            "  Check that GOOGLE_SHEET_ID is correct and the service account "
-            "has been shared on the sheet."
+            f"Could not open spreadsheet '{GOOGLE_SHEET_ID}'.\n"
+            f"  Exception type : {type(exc).__name__}\n"
+            f"  Exception repr : {exc!r}\n"
+            f"  Raw args       : {exc.args}\n"
+            "  Likely fix: open the Google Sheet → Share → add "
+            "'jobsearch@jobsearch-494412.iam.gserviceaccount.com' as Editor."
         ) from exc
     print(f"  [debug] Spreadsheet opened: {spreadsheet.title!r}")
 
